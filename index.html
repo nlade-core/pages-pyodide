@@ -121,7 +121,7 @@
         <input type="file" id="file-input" accept="image/*">
       </div>
       <button class="secondary" id="webcam-btn" style="margin-top:0.75rem;">Or use your webcam, live</button>
-      <video id="webcam-video" autoplay playsinline muted style="display:none;"></video>
+      <video id="webcam-video" autoplay playsinline muted style="position:absolute; width:2px; height:2px; opacity:0.01; pointer-events:none;"></video>
 
       <div id="canvas-wrap" style="display:none; margin-top:1rem;">
         <canvas id="view"></canvas>
