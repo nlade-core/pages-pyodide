@@ -134,6 +134,7 @@
             <canvas id="view"></canvas>
           </div>
         </div>
+        <div class="op-note" id="res-readout"></div>
         <div class="ops">
           <button class="secondary" data-op="original">Original</button>
           <button class="secondary" data-op="grayscale">Grayscale</button>
@@ -156,6 +157,7 @@
     let pyodide = null;
     let originalImageData = null; // { data: Uint8ClampedArray, width, height }
     const MAX_DIMENSION = 900;
+    const LIVE_MAX_DIMENSION = 480; // matches the resolution actual performance numbers were benchmarked at
 
     const bootStatus = document.getElementById('boot-status');
     const loadBtn = document.getElementById('load-btn');
@@ -260,15 +262,22 @@
       webcamVideo.srcObject = webcamStream;
       await new Promise((resolve) => { webcamVideo.onloadedmetadata = resolve; });
 
-      let width = webcamVideo.videoWidth;
-      let height = webcamVideo.videoHeight;
-      if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
-        const scale = MAX_DIMENSION / Math.max(width, height);
-        width = Math.round(width * scale);
-        height = Math.round(height * scale);
-      }
+      const rawWidth = webcamVideo.videoWidth;
+      const rawHeight = webcamVideo.videoHeight;
+      // Deterministic downscale to the resolution performance numbers were actually
+      // benchmarked at -- not relying on the getUserMedia "ideal" hint being honored,
+      // since it's a hint, not a guarantee, and processing full camera resolution
+      // (e.g. 1080p on newer MacBook webcams) would be meaningfully slower than the
+      // published fps figures for the heavier filters.
+      const scale = Math.min(1, LIVE_MAX_DIMENSION / Math.max(rawWidth, rawHeight));
+      const width = Math.round(rawWidth * scale);
+      const height = Math.round(rawHeight * scale);
       viewCanvas.width = width;
       viewCanvas.height = height;
+
+      document.getElementById('res-readout').textContent =
+        'Camera delivered: ' + rawWidth + '×' + rawHeight + '. Processing at: ' + width + '×' + height +
+        (scale < 1 ? ' (downscaled for consistent performance).' : ' (camera stream was already this size or smaller).');
 
       dropZone.style.display = 'none';
       webcamBtn.style.display = 'none';
@@ -315,6 +324,7 @@
       document.getElementById('new-image-btn').style.display = 'inline-block';
       stopWebcamBtn.style.display = 'none';
       opNote.textContent = '';
+      document.getElementById('res-readout').textContent = '';
     });
 
     document.getElementById('download-btn').addEventListener('click', () => {
