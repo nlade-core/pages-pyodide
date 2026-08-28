@@ -289,25 +289,59 @@
 
       webcamActive = true;
       currentLiveOp = 'grayscale';
-      liveLoop();
+
+      // Throttle to every Nth actual camera frame, not a guessed timer. Most
+      // built-in webcams (including this class of FaceTime HD camera) run at
+      // ~30fps natively -- Apple doesn't publish an exact spec, but it's the
+      // de facto standard and the default browsers request. Every 5th frame
+      // is roughly 6fps: visibly live, without leaning on peak throughput.
+      const PROCESS_EVERY_N_FRAMES = 5;
+      let frameCount = 0;
+
+      if (webcamVideo.requestVideoFrameCallback) {
+        document.getElementById('res-readout').textContent += ' Frame timing: requestVideoFrameCallback (tied to real camera frames).';
+        const onVideoFrame = async () => {
+          if (!webcamActive) return;
+          frameCount++;
+          try {
+            if (frameCount % PROCESS_EVERY_N_FRAMES === 0) await processCurrentFrame(frameCount);
+            webcamVideo.requestVideoFrameCallback(onVideoFrame);
+          } catch (e) {
+            opNote.textContent = 'Live processing stopped — error: ' + e.message;
+            webcamActive = false;
+          }
+        };
+        webcamVideo.requestVideoFrameCallback(onVideoFrame);
+      } else {
+        document.getElementById('res-readout').textContent += ' Frame timing: requestVideoFrameCallback not supported here, using a display-refresh fallback.';
+        liveLoopFallback(PROCESS_EVERY_N_FRAMES);
+      }
     });
 
-    async function liveLoop() {
+    async function processCurrentFrame(frameCount) {
+      const ctx = viewCanvas.getContext('2d');
+      ctx.drawImage(webcamVideo, 0, 0, viewCanvas.width, viewCanvas.height);
+      const frame = ctx.getImageData(0, 0, viewCanvas.width, viewCanvas.height);
+      const { array, elapsed } = await applyOp(currentLiveOp, frame.data, viewCanvas.width, viewCanvas.height);
       if (!webcamActive) return;
-      try {
-        const ctx = viewCanvas.getContext('2d');
-        ctx.drawImage(webcamVideo, 0, 0, viewCanvas.width, viewCanvas.height);
-        const frame = ctx.getImageData(0, 0, viewCanvas.width, viewCanvas.height);
-        const { array, elapsed } = await applyOp(currentLiveOp, frame.data, viewCanvas.width, viewCanvas.height);
-        if (!webcamActive) return; // stopped while awaiting
-        ctx.putImageData(new ImageData(array, viewCanvas.width, viewCanvas.height), 0, 0);
-        const fps = (1000 / Math.max(elapsed, 1)).toFixed(1);
-        opNote.textContent = 'Live: ' + OP_LABELS[currentLiveOp] + ' — ' + elapsed.toFixed(0) + 'ms/frame (~' + fps + ' fps), real OpenCV, every frame.';
-        requestAnimationFrame(liveLoop);
-      } catch (e) {
-        opNote.textContent = 'Live processing stopped — error: ' + e.message;
-        webcamActive = false;
+      ctx.putImageData(new ImageData(array, viewCanvas.width, viewCanvas.height), 0, 0);
+      opNote.textContent = 'Live: ' + OP_LABELS[currentLiveOp] + ' — frame #' + frameCount + ', processed in ' + elapsed.toFixed(0) + 'ms, real OpenCV.';
+    }
+
+    async function liveLoopFallback(everyN) {
+      let count = 0;
+      async function tick() {
+        if (!webcamActive) return;
+        try {
+          count++;
+          if (count % everyN === 0) await processCurrentFrame(count);
+          requestAnimationFrame(tick);
+        } catch (e) {
+          opNote.textContent = 'Live processing stopped — error: ' + e.message;
+          webcamActive = false;
+        }
       }
+      requestAnimationFrame(tick);
     }
 
     stopWebcamBtn.addEventListener('click', () => {
