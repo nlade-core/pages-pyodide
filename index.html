@@ -106,7 +106,7 @@
 <body>
   <div class="layout">
     <h1>pages-pyodide</h1>
-    <p class="tagline">Real image processing — grayscale, edge detection, blur, face detection — running as actual OpenCV, entirely in your browser. Your photo never leaves this tab.</p>
+    <p class="tagline">Real image processing — grayscale, edge detection, blur, face detection — running as actual OpenCV, entirely in your browser. Upload a photo, or run it live on your webcam. Nothing you show it ever leaves this tab.</p>
     <p class="subnote">Built on <a href="https://github.com/nlade-core/pages-lab" target="_blank" rel="noopener">pages-lab</a>'s findings about what's genuinely possible with Pyodide in a static site. <a href="https://github.com/nlade-core/pages-pyodide" target="_blank" rel="noopener">Source</a>.</p>
 
     <div class="panel" id="boot-panel">
@@ -120,6 +120,8 @@
         <p><strong>Drop a photo here</strong>, or click to choose one.</p>
         <input type="file" id="file-input" accept="image/*">
       </div>
+      <button class="secondary" id="webcam-btn" style="margin-top:0.75rem;">Or use your webcam, live</button>
+      <video id="webcam-video" autoplay playsinline muted style="display:none;"></video>
 
       <div id="canvas-wrap" style="display:none; margin-top:1rem;">
         <canvas id="view"></canvas>
@@ -134,6 +136,7 @@
         <div class="op-note" id="op-note"></div>
         <button id="download-btn" style="margin-top:0.75rem;">Download result</button>
         <button class="secondary" id="new-image-btn" style="margin-top:0.75rem;">Choose a different photo</button>
+        <button class="secondary" id="stop-webcam-btn" style="margin-top:0.75rem; display:none;">Stop webcam</button>
       </div>
     </div>
 
@@ -205,27 +208,93 @@
       originalImageData = null;
     });
 
-    async function runOp(op) {
-      if (!originalImageData) return;
-      opNote.textContent = 'Processing…';
-      const { data, width, height } = originalImageData;
+    async function applyOp(op, data, width, height) {
       pyodide.globals.set('img_bytes', data);
       pyodide.globals.set('img_w', width);
       pyodide.globals.set('img_h', height);
-
-      const code = OPS[op];
       const t0 = performance.now();
-      const resultBytes = await pyodide.runPythonAsync(code);
-      const elapsed = (performance.now() - t0).toFixed(0);
+      const resultBytes = await pyodide.runPythonAsync(OPS[op]);
+      const elapsed = performance.now() - t0;
+      return { array: new Uint8ClampedArray(resultBytes.toJs()), elapsed };
+    }
 
-      const outArray = new Uint8ClampedArray(resultBytes.toJs());
-      const outImageData = new ImageData(outArray, width, height);
+    async function runOp(op) {
+      if (webcamActive) { currentLiveOp = op; return; }
+      if (!originalImageData) return;
+      opNote.textContent = 'Processing…';
+      const { data, width, height } = originalImageData;
+      const { array, elapsed } = await applyOp(op, data, width, height);
+      const outImageData = new ImageData(array, width, height);
       viewCanvas.getContext('2d').putImageData(outImageData, 0, 0);
-      opNote.textContent = OP_LABELS[op] + ' — ' + elapsed + 'ms, real OpenCV, computed just now.';
+      opNote.textContent = OP_LABELS[op] + ' — ' + elapsed.toFixed(0) + 'ms, real OpenCV, computed just now.';
     }
 
     document.querySelectorAll('.ops button').forEach((btn) => {
       btn.addEventListener('click', () => runOp(btn.dataset.op));
+    });
+
+    // --- Live webcam mode ---
+    let webcamActive = false;
+    let currentLiveOp = 'grayscale';
+    let webcamStream = null;
+    const webcamVideo = document.getElementById('webcam-video');
+    const webcamBtn = document.getElementById('webcam-btn');
+    const stopWebcamBtn = document.getElementById('stop-webcam-btn');
+
+    webcamBtn.addEventListener('click', async () => {
+      try {
+        webcamStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 480 } } });
+      } catch (e) {
+        opNote.textContent = 'Could not access webcam: ' + e.message;
+        return;
+      }
+      webcamVideo.srcObject = webcamStream;
+      await new Promise((resolve) => { webcamVideo.onloadedmetadata = resolve; });
+
+      let width = webcamVideo.videoWidth;
+      let height = webcamVideo.videoHeight;
+      if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+        const scale = MAX_DIMENSION / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      viewCanvas.width = width;
+      viewCanvas.height = height;
+
+      dropZone.style.display = 'none';
+      webcamBtn.style.display = 'none';
+      canvasWrap.style.display = 'block';
+      document.getElementById('new-image-btn').style.display = 'none';
+      stopWebcamBtn.style.display = 'inline-block';
+
+      webcamActive = true;
+      currentLiveOp = 'grayscale';
+      liveLoop();
+    });
+
+    async function liveLoop() {
+      if (!webcamActive) return;
+      const ctx = viewCanvas.getContext('2d');
+      ctx.drawImage(webcamVideo, 0, 0, viewCanvas.width, viewCanvas.height);
+      const frame = ctx.getImageData(0, 0, viewCanvas.width, viewCanvas.height);
+      const { array, elapsed } = await applyOp(currentLiveOp, frame.data, viewCanvas.width, viewCanvas.height);
+      if (!webcamActive) return; // stopped while awaiting
+      ctx.putImageData(new ImageData(array, viewCanvas.width, viewCanvas.height), 0, 0);
+      const fps = (1000 / Math.max(elapsed, 1)).toFixed(1);
+      opNote.textContent = 'Live: ' + OP_LABELS[currentLiveOp] + ' — ' + elapsed.toFixed(0) + 'ms/frame (~' + fps + ' fps ceiling), real OpenCV, every frame.';
+      requestAnimationFrame(liveLoop);
+    }
+
+    stopWebcamBtn.addEventListener('click', () => {
+      webcamActive = false;
+      if (webcamStream) webcamStream.getTracks().forEach((t) => t.stop());
+      webcamStream = null;
+      dropZone.style.display = 'block';
+      webcamBtn.style.display = 'inline-block';
+      canvasWrap.style.display = 'none';
+      document.getElementById('new-image-btn').style.display = 'inline-block';
+      stopWebcamBtn.style.display = 'none';
+      opNote.textContent = '';
     });
 
     document.getElementById('download-btn').addEventListener('click', () => {
