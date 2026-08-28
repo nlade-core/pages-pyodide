@@ -405,7 +405,9 @@ out.tobytes()
 `,
       faces: COMMON_SETUP + `
 gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+if '_face_cascade' not in globals():
+    globals()['_face_cascade'] = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+cascade = globals()['_face_cascade']
 faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
 annotated = bgr.copy()
 for (x, y, w, h) in faces:
