@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pages-pyodide — real-time image processing</title>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.28.0/full/pyodide.js" integrity="sha384-aD6ek5pFVnSSMGK0qubk9ZJdMYGjPs8F6jdJaDJiyZbTcH9jLWR4LJNJ7yY430qI" crossorigin="anonymous"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  img, picture, video, canvas, svg { display: block; max-width: 100%; }
+  input, button, textarea, select { font: inherit; }
+  p, h1, h2, h3 { overflow-wrap: break-word; }
+
+  :root {
+    --bg: #ffffff;
+    --fg: #111111;
+    --muted: #555555;
+    --border: #dddddd;
+    --accent: #0a58ca;
+    --accent-fg: #ffffff;
+    --panel: #f6f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --muted: #9aa4af;
+      --border: #30363d;
+      --accent: #6ea8fe;
+      --accent-fg: #0d1117;
+      --panel: #161b22;
+    }
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    padding: 3rem 1.5rem;
+  }
+
+  .layout { max-width: 720px; margin: 0 auto; }
+
+  h1 { font-size: 1.6rem; margin-bottom: 0.35rem; }
+  .tagline { color: var(--muted); margin-bottom: 0.5rem; }
+  .subnote { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  button {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border: none;
+    border-radius: 6px;
+    padding: 0.6rem 1.1rem;
+    cursor: pointer;
+    font-size: 0.95rem;
+  }
+  button:hover { opacity: 0.9; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.secondary {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--border);
+  }
+
+  #boot-status { color: var(--muted); font-size: 0.9rem; margin-top: 0.75rem; min-height: 1.2em; }
+
+  #drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 2.5rem 1rem;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  #drop-zone.dragover { border-color: var(--accent); color: var(--fg); }
+  #drop-zone input { display: none; }
+
+  .workspace { display: none; }
+  .workspace.active { display: block; }
+
+  canvas#view {
+    width: 100%;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: repeating-conic-gradient(#8883 0% 25%, transparent 0% 50%) 50% / 20px 20px;
+  }
+
+  .ops { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+
+  .op-note { color: var(--muted); font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
+
+  footer { color: var(--muted); font-size: 0.85rem; margin-top: 2rem; text-align: center; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="layout">
+    <h1>pages-pyodide</h1>
+    <p class="tagline">Real image processing — grayscale, edge detection, blur, face detection — running as actual OpenCV, entirely in your browser. Your photo never leaves this tab.</p>
+    <p class="subnote">Built on <a href="https://github.com/nlade-core/pages-lab" target="_blank" rel="noopener">pages-lab</a>'s findings about what's genuinely possible with Pyodide in a static site. <a href="https://github.com/nlade-core/pages-pyodide" target="_blank" rel="noopener">Source</a>.</p>
+
+    <div class="panel" id="boot-panel">
+      <p>This loads real Python + OpenCV — about 26MB total, cached by your browser after the first visit. Nothing happens until you choose to load it.</p>
+      <button id="load-btn">Load the demo</button>
+      <div id="boot-status"></div>
+    </div>
+
+    <div class="panel workspace" id="workspace">
+      <div id="drop-zone">
+        <p><strong>Drop a photo here</strong>, or click to choose one.</p>
+        <input type="file" id="file-input" accept="image/*">
+      </div>
+
+      <div id="canvas-wrap" style="display:none; margin-top:1rem;">
+        <canvas id="view"></canvas>
+        <div class="ops">
+          <button class="secondary" data-op="original">Original</button>
+          <button class="secondary" data-op="grayscale">Grayscale</button>
+          <button class="secondary" data-op="edges">Edge detection</button>
+          <button class="secondary" data-op="blur">Blur</button>
+          <button class="secondary" data-op="faces">Face detection</button>
+          <button class="secondary" data-op="cartoon">Cartoonify</button>
+        </div>
+        <div class="op-note" id="op-note"></div>
+        <button id="download-btn" style="margin-top:0.75rem;">Download result</button>
+        <button class="secondary" id="new-image-btn" style="margin-top:0.75rem;">Choose a different photo</button>
+      </div>
+    </div>
+
+    <footer>100% client-side. No upload, no server, no account. Part of the <a href="https://nlade-core.github.io/pages-lab/">pages-lab</a> family of experiments.</footer>
+  </div>
+
+  <script>
+    let pyodide = null;
+    let originalImageData = null; // { data: Uint8ClampedArray, width, height }
+    const MAX_DIMENSION = 900;
+
+    const bootStatus = document.getElementById('boot-status');
+    const loadBtn = document.getElementById('load-btn');
+    const workspace = document.getElementById('workspace');
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const canvasWrap = document.getElementById('canvas-wrap');
+    const viewCanvas = document.getElementById('view');
+    const opNote = document.getElementById('op-note');
+
+    loadBtn.addEventListener('click', async () => {
+      loadBtn.disabled = true;
+      bootStatus.textContent = 'Loading Python runtime…';
+      const t0 = performance.now();
+      pyodide = await loadPyodide();
+      bootStatus.textContent = 'Loading OpenCV, numpy, Pillow…';
+      await pyodide.loadPackage(['opencv-python', 'numpy', 'pillow']);
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+      bootStatus.textContent = 'Ready — loaded in ' + elapsed + 's.';
+      document.getElementById('boot-panel').style.display = 'none';
+      workspace.classList.add('active');
+    });
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files[0]) loadImageFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files[0]) loadImageFile(fileInput.files[0]);
+    });
+
+    async function loadImageFile(file) {
+      const bitmap = await createImageBitmap(file);
+      let { width, height } = bitmap;
+      if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+        const scale = MAX_DIMENSION / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      viewCanvas.width = width;
+      viewCanvas.height = height;
+      const ctx = viewCanvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0, width, height);
+      const imageData = ctx.getImageData(0, 0, width, height);
+      originalImageData = { data: imageData.data, width, height };
+      dropZone.style.display = 'none';
+      canvasWrap.style.display = 'block';
+      opNote.textContent = '';
+    }
+
+    document.getElementById('new-image-btn').addEventListener('click', () => {
+      dropZone.style.display = 'block';
+      canvasWrap.style.display = 'none';
+      fileInput.value = '';
+      originalImageData = null;
+    });
+
+    async function runOp(op) {
+      if (!originalImageData) return;
+      opNote.textContent = 'Processing…';
+      const { data, width, height } = originalImageData;
+      pyodide.globals.set('img_bytes', data);
+      pyodide.globals.set('img_w', width);
+      pyodide.globals.set('img_h', height);
+
+      const code = OPS[op];
+      const t0 = performance.now();
+      const resultBytes = await pyodide.runPythonAsync(code);
+      const elapsed = (performance.now() - t0).toFixed(0);
+
+      const outArray = new Uint8ClampedArray(resultBytes.toJs());
+      const outImageData = new ImageData(outArray, width, height);
+      viewCanvas.getContext('2d').putImageData(outImageData, 0, 0);
+      opNote.textContent = OP_LABELS[op] + ' — ' + elapsed + 'ms, real OpenCV, computed just now.';
+    }
+
+    document.querySelectorAll('.ops button').forEach((btn) => {
+      btn.addEventListener('click', () => runOp(btn.dataset.op));
+    });
+
+    document.getElementById('download-btn').addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = 'pages-pyodide-result.png';
+      link.href = viewCanvas.toDataURL('image/png');
+      link.click();
+    });
+
+    const OP_LABELS = {
+      original: 'Original',
+      grayscale: 'Grayscale',
+      edges: 'Canny edge detection',
+      blur: 'Gaussian blur',
+      faces: 'Face detection (Haar cascade)',
+      cartoon: 'Cartoonify'
+    };
+
+    const COMMON_SETUP = `
+import numpy as np
+import cv2
+arr = np.frombuffer(img_bytes.to_py(), dtype=np.uint8).reshape((img_h, img_w, 4))
+bgr = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+`;
+
+    const OPS = {
+      original: COMMON_SETUP + `
+out = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA)
+out.tobytes()
+`,
+      grayscale: COMMON_SETUP + `
+gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+out = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGBA)
+out.tobytes()
+`,
+      edges: COMMON_SETUP + `
+gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+edges = cv2.Canny(gray, 80, 160)
+out = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGBA)
+out.tobytes()
+`,
+      blur: COMMON_SETUP + `
+blurred = cv2.GaussianBlur(bgr, (15, 15), 0)
+out = cv2.cvtColor(blurred, cv2.COLOR_BGR2RGBA)
+out.tobytes()
+`,
+      faces: COMMON_SETUP + `
+gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+annotated = bgr.copy()
+for (x, y, w, h) in faces:
+    cv2.rectangle(annotated, (x, y), (x + w, y + h), (0, 255, 0), 3)
+out = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGBA)
+out.tobytes()
+`,
+      cartoon: COMMON_SETUP + `
+gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+gray_blur = cv2.medianBlur(gray, 5)
+edges = cv2.adaptiveThreshold(gray_blur, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 9, 9)
+color = cv2.bilateralFilter(bgr, 9, 250, 250)
+cartoon = cv2.bitwise_and(color, color, mask=edges)
+out = cv2.cvtColor(cartoon, cv2.COLOR_BGR2RGBA)
+out.tobytes()
+`
+    };
+  </script>
+</body>
+</html>
