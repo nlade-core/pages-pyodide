@@ -95,6 +95,7 @@
     background: repeating-conic-gradient(#8883 0% 25%, transparent 0% 50%) 50% / 20px 20px;
   }
 
+  .compare-label { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.35rem; }
   .ops { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
 
   .op-note { color: var(--muted); font-size: 0.85rem; margin-top: 0.75rem; min-height: 1.2em; }
@@ -121,10 +122,18 @@
         <input type="file" id="file-input" accept="image/*">
       </div>
       <button class="secondary" id="webcam-btn" style="margin-top:0.75rem;">Or use your webcam, live</button>
-      <video id="webcam-video" autoplay playsinline muted style="position:absolute; width:2px; height:2px; opacity:0.01; pointer-events:none;"></video>
 
       <div id="canvas-wrap" style="display:none; margin-top:1rem;">
-        <canvas id="view"></canvas>
+        <div id="compare-row" style="display:flex; gap:1rem; flex-wrap:wrap;">
+          <div id="video-col" style="display:none; flex:1; min-width:200px;">
+            <p class="compare-label">Live camera (raw)</p>
+            <video id="webcam-video" autoplay playsinline muted style="width:100%; border-radius:8px; border:1px solid var(--border); background:#000;"></video>
+          </div>
+          <div style="flex:1; min-width:200px;">
+            <p class="compare-label" id="canvas-label">Result</p>
+            <canvas id="view"></canvas>
+          </div>
+        </div>
         <div class="ops">
           <button class="secondary" data-op="original">Original</button>
           <button class="secondary" data-op="grayscale">Grayscale</button>
@@ -264,6 +273,8 @@
       dropZone.style.display = 'none';
       webcamBtn.style.display = 'none';
       canvasWrap.style.display = 'block';
+      document.getElementById('video-col').style.display = 'block';
+      document.getElementById('canvas-label').textContent = 'Processed (live)';
       document.getElementById('new-image-btn').style.display = 'none';
       stopWebcamBtn.style.display = 'inline-block';
 
@@ -274,15 +285,20 @@
 
     async function liveLoop() {
       if (!webcamActive) return;
-      const ctx = viewCanvas.getContext('2d');
-      ctx.drawImage(webcamVideo, 0, 0, viewCanvas.width, viewCanvas.height);
-      const frame = ctx.getImageData(0, 0, viewCanvas.width, viewCanvas.height);
-      const { array, elapsed } = await applyOp(currentLiveOp, frame.data, viewCanvas.width, viewCanvas.height);
-      if (!webcamActive) return; // stopped while awaiting
-      ctx.putImageData(new ImageData(array, viewCanvas.width, viewCanvas.height), 0, 0);
-      const fps = (1000 / Math.max(elapsed, 1)).toFixed(1);
-      opNote.textContent = 'Live: ' + OP_LABELS[currentLiveOp] + ' — ' + elapsed.toFixed(0) + 'ms/frame (~' + fps + ' fps ceiling), real OpenCV, every frame.';
-      requestAnimationFrame(liveLoop);
+      try {
+        const ctx = viewCanvas.getContext('2d');
+        ctx.drawImage(webcamVideo, 0, 0, viewCanvas.width, viewCanvas.height);
+        const frame = ctx.getImageData(0, 0, viewCanvas.width, viewCanvas.height);
+        const { array, elapsed } = await applyOp(currentLiveOp, frame.data, viewCanvas.width, viewCanvas.height);
+        if (!webcamActive) return; // stopped while awaiting
+        ctx.putImageData(new ImageData(array, viewCanvas.width, viewCanvas.height), 0, 0);
+        const fps = (1000 / Math.max(elapsed, 1)).toFixed(1);
+        opNote.textContent = 'Live: ' + OP_LABELS[currentLiveOp] + ' — ' + elapsed.toFixed(0) + 'ms/frame (~' + fps + ' fps ceiling), real OpenCV, every frame.';
+        requestAnimationFrame(liveLoop);
+      } catch (e) {
+        opNote.textContent = 'Live processing stopped — error: ' + e.message;
+        webcamActive = false;
+      }
     }
 
     stopWebcamBtn.addEventListener('click', () => {
@@ -292,6 +308,8 @@
       dropZone.style.display = 'block';
       webcamBtn.style.display = 'inline-block';
       canvasWrap.style.display = 'none';
+      document.getElementById('video-col').style.display = 'none';
+      document.getElementById('canvas-label').textContent = 'Result';
       document.getElementById('new-image-btn').style.display = 'inline-block';
       stopWebcamBtn.style.display = 'none';
       opNote.textContent = '';
